@@ -49,6 +49,9 @@ resource "aws_launch_template" "asg_lt" {
   }
 
   # Inyección del script de arranque decodificando los archivos web en Base64
+  iam_instance_profile {
+    name = aws_iam_instance_profile.web_ec2.name
+  }
   user_data = base64encode(templatefile("${path.module}/user_data.sh.tftpl", {
     base64_index_html = filebase64("${path.module}/../web/index.html")
     base64_styles_css = filebase64("${path.module}/../web/styles.css")
