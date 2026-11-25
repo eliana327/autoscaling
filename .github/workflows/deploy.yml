@@ -24,6 +24,7 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::079301214534:role/citas-escolares-github-oidc-role
           aws-region: us-east-1
+          audience: sts.amazonaws.com
 
       - name: Configurar Terraform
         uses: hashicorp/setup-terraform@v3
