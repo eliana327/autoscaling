@@ -14,7 +14,7 @@ dnf install -y nginx python3
 mkdir -p /var/www/html
 mkdir -p /opt/app
 
-# 3. Escribir Frontend Web (HTML, CSS, JS) decodificando Base64
+# 3. Descargar Frontend Web (HTML, CSS, JS) desde S3
 aws s3 cp s3://${bucket_name}/index.html /var/www/html/index.html
 aws s3 cp s3://${bucket_name}/styles.css /var/www/html/styles.css
 aws s3 cp s3://${bucket_name}/app.js /var/www/html/app.js
@@ -79,7 +79,7 @@ BOOT_TIME = time.time()
 LAST_CPU_IDLE = 0.0
 LAST_CPU_TOTAL = 0.0
 STRESS_PROCS = []
-STRESS_LOCK = threading.Lock()
+STRESS_LOCK = threading.RLock()
 
 def get_imds(path):
     try:
