@@ -1,0 +1,293 @@
+#!/bin/bash
+set -e
+exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+
+echo "=========================================================="
+echo "Iniciando aprovisionamiento del nodo Auto Scaling"
+echo "=========================================================="
+
+# 1. Actualizar e instalar Nginx y Python 3
+dnf update -y
+dnf install -y nginx python3
+
+# 2. Crear carpetas de la aplicación
+mkdir -p /var/www/html
+mkdir -p /opt/app
+
+# 3. Escribir Frontend Web (HTML, CSS, JS) decodificando Base64
+aws s3 cp s3://${bucket_name}/index.html /var/www/html/index.html
+aws s3 cp s3://${bucket_name}/styles.css /var/www/html/styles.css
+aws s3 cp s3://${bucket_name}/app.js /var/www/html/app.js
+
+# Permisos para Nginx
+chown -R nginx:nginx /var/www/html
+chmod -R 755 /var/www/html
+
+# 4. Configurar Nginx con Reverse Proxy hacia el servicio local en el puerto 5000
+cat <<'EOF' > /etc/nginx/conf.d/asg.conf
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    root /var/www/html;
+    index index.html;
+
+    # Evita cache en balanceo de carga
+    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0";
+    add_header Pragma "no-cache";
+    add_header Expires "0";
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:5000/api/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 10s;
+    }
+
+    location /health {
+        proxy_pass http://127.0.0.1:5000/health;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 3s;
+    }
+}
+EOF
+
+# Remover configuracion por defecto si existe para evitar conflictos de virtualhost
+sed -i 's/listen       80 default_server;/listen 8080 default_server;/g' /etc/nginx/nginx.conf 2>/dev/null || true
+
+# 5. Crear el Backend en Python puro (sin dependencias externas)
+cat <<'PYEOF' > /opt/app/server.py
+import http.server
+import json
+import multiprocessing
+import os
+import signal
+import socket
+import sys
+import threading
+import time
+import urllib.request
+
+BOOT_TIME = time.time()
+LAST_CPU_IDLE = 0.0
+LAST_CPU_TOTAL = 0.0
+STRESS_PROCS = []
+STRESS_LOCK = threading.Lock()
+
+def get_imds(path):
+    try:
+        # IMDSv2
+        req = urllib.request.Request(
+            "http://169.254.169.254/latest/api/token",
+            headers={"X-aws-ec2-metadata-token-ttl-seconds": "21600"},
+            method="PUT"
+        )
+        with urllib.request.urlopen(req, timeout=1) as r:
+            token = r.read().decode("utf-8")
+        
+        req2 = urllib.request.Request(
+            f"http://169.254.169.254/latest/meta-data/{path}",
+            headers={"X-aws-ec2-metadata-token": token}
+        )
+        with urllib.request.urlopen(req2, timeout=1) as r2:
+            return r2.read().decode("utf-8")
+    except Exception:
+        # Fallback IMDSv1
+        try:
+            with urllib.request.urlopen(f"http://169.254.169.254/latest/meta-data/{path}", timeout=1) as r:
+                return r.read().decode("utf-8")
+        except Exception:
+            return f"local-{socket.gethostname()}"
+
+INSTANCE_ID = get_imds("instance-id")
+AZ = get_imds("placement/availability-zone")
+PRIVATE_IP = get_imds("local-ipv4")
+
+def read_cpu():
+    global LAST_CPU_IDLE, LAST_CPU_TOTAL
+    try:
+        with open("/proc/stat", "r") as f:
+            line = f.readline()
+        vals = [float(x) for x in line.split()[1:8]]
+        idle = vals[3] + vals[4]
+        total = sum(vals)
+        diff_idle = idle - LAST_CPU_IDLE
+        diff_total = total - LAST_CPU_TOTAL
+        LAST_CPU_IDLE = idle
+        LAST_CPU_TOTAL = total
+        if diff_total <= 0:
+            return 0.0
+        pct = 100.0 * (1.0 - (diff_idle / diff_total))
+        return round(max(0.0, min(100.0, pct)), 1)
+    except Exception:
+        return 0.0
+
+def read_mem():
+    try:
+        data = {}
+        with open("/proc/meminfo", "r") as f:
+            for l in f:
+                parts = l.split(":")
+                if len(parts) == 2:
+                    k = parts[0].strip()
+                    v = float(parts[1].strip().split()[0])
+                    data[k] = v
+        total = data.get("MemTotal", 1024.0)
+        avail = data.get("MemAvailable", data.get("MemFree", 0.0))
+        used = total - avail
+        pct = round((used / total) * 100.0, 1)
+        return pct, int(used / 1024), int(total / 1024)
+    except Exception:
+        return 0.0, 0, 0
+
+def cpu_burner(stop_evt, duration):
+    start = time.time()
+    while not stop_evt.is_set():
+        if duration and (time.time() - start) > duration:
+            break
+        # Bucle matematico intensivo para saturar el core
+        _ = [x*x for x in range(20000)]
+
+STOP_EVENT = multiprocessing.Event()
+
+def start_stress_workers(duration=600):
+    global STRESS_PROCS, STOP_EVENT
+    with STRESS_LOCK:
+        stop_stress_workers()
+        STOP_EVENT = multiprocessing.Event()
+        cores = multiprocessing.cpu_count()
+        STRESS_PROCS = []
+        for _ in range(cores):
+            p = multiprocessing.Process(target=cpu_burner, args=(STOP_EVENT, duration))
+            p.daemon = True
+            p.start()
+            STRESS_PROCS.append(p)
+        print(f"Iniciados {cores} procesos de estres de CPU por {duration}s")
+
+def stop_stress_workers():
+    global STRESS_PROCS, STOP_EVENT
+    with STRESS_LOCK:
+        if STOP_EVENT:
+            STOP_EVENT.set()
+        for p in STRESS_PROCS:
+            try:
+                if p.is_alive():
+                    p.terminate()
+                    p.join(timeout=1)
+            except Exception:
+                pass
+        STRESS_PROCS = []
+        print("Procesos de estres detenidos")
+
+def is_stress_active():
+    with STRESS_LOCK:
+        alive = [p for p in STRESS_PROCS if p.is_alive()]
+        return len(alive) > 0
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def send_cors_json(self, status, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.end_headers()
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        if path == "/health":
+            self.send_cors_json(200, {"status": "ok", "instance_id": INSTANCE_ID})
+        elif path == "/api/info":
+            cpu = read_cpu()
+            mem_pct, mem_used, mem_tot = read_mem()
+            uptime = int(time.time() - BOOT_TIME)
+            stress = is_stress_active()
+            self.send_cors_json(200, {
+                "instance_id": INSTANCE_ID,
+                "availability_zone": AZ,
+                "private_ip": PRIVATE_IP,
+                "cpu_percent": cpu,
+                "memory_percent": mem_pct,
+                "memory_used_mb": mem_used,
+                "memory_total_mb": mem_tot,
+                "stress_active": stress,
+                "uptime_seconds": uptime
+            })
+        elif path == "/api/stress/start":
+            start_stress_workers(duration=600)
+            self.send_cors_json(200, {"status": "stress_started", "cores": multiprocessing.cpu_count()})
+        elif path == "/api/stress/stop":
+            stop_stress_workers()
+            self.send_cors_json(200, {"status": "stress_stopped"})
+        else:
+            self.send_cors_json(404, {"error": "not found"})
+
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        if path == "/api/stress/start":
+            start_stress_workers(duration=600)
+            self.send_cors_json(200, {"status": "stress_started", "cores": multiprocessing.cpu_count()})
+        elif path == "/api/stress/stop":
+            stop_stress_workers()
+            self.send_cors_json(200, {"status": "stress_stopped"})
+        else:
+            self.send_cors_json(404, {"error": "not found"})
+
+    def log_message(self, format, *args):
+        # Silenciar logs ruidosos de peticiones continuas
+        return
+
+if __name__ == "__main__":
+    read_cpu() # warmup cpu diff
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 5000), Handler)
+    print("Iniciando servidor de telemetria en 127.0.0.1:5000...")
+    server.serve_forever()
+PYEOF
+
+# 6. Crear servicio Systemd para el Backend
+cat <<'EOF' > /etc/systemd/system/asg-server.service
+[Unit]
+Description=ASG Telemetry and Stress Worker Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/app
+ExecStart=/usr/bin/python3 /opt/app/server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 7. Iniciar y habilitar servicios
+systemctl daemon-reload
+systemctl enable asg-server
+systemctl restart asg-server
+
+systemctl enable nginx
+systemctl restart nginx
+
+echo "=========================================================="
+echo "Aprovisionamiento completado exitosamente!"
+echo "=========================================================="
