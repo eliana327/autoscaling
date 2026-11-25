@@ -2,7 +2,7 @@
 # LAUNCH TEMPLATE Y AUTO SCALING GROUP (1 A 4 INSTANCIAS T3.MICRO)
 # ==============================================================================
 
-# Obtener la AMI más reciente de Amazon Linux 2023
+# Obtener la AMI mÃ¡s reciente de Amazon Linux 2023
 data "aws_ami" "amazon_linux_2023" {
   most_recent = true
   owners      = ["amazon"]
@@ -48,11 +48,12 @@ resource "aws_launch_template" "asg_lt" {
     }
   }
 
-  # Inyección del script de arranque decodificando los archivos web en Base64
+  # InyecciÃ³n del script de arranque decodificando los archivos web en Base64
   iam_instance_profile {
     name = aws_iam_instance_profile.web_ec2.name
   }
   user_data = base64encode(templatefile("${path.module}/user_data.sh.tftpl", {
+    bucket_name       = aws_s3_bucket.web_assets.bucket
     base64_index_html = filebase64("${path.module}/../web/index.html")
     base64_styles_css = filebase64("${path.module}/../web/styles.css")
     base64_app_js     = filebase64("${path.module}/../web/app.js")
@@ -61,10 +62,10 @@ resource "aws_launch_template" "asg_lt" {
   tag_specifications {
     resource_type = "instance"
     tags = {
-      Name        = "${var.project_name}-node"
-      Proyecto    = var.project_name
-      Entorno     = var.environment
-      Capas       = "FreeTier"
+      Name     = "${var.project_name}-node"
+      Proyecto = var.project_name
+      Entorno  = var.environment
+      Capas    = "FreeTier"
     }
   }
 
@@ -79,12 +80,12 @@ resource "aws_autoscaling_group" "asg" {
   vpc_zone_identifier = [aws_subnet.public_a.id, aws_subnet.public_b.id]
   target_group_arns   = [aws_lb_target_group.asg_tg.arn]
 
-  # Límites requeridos: Mínimo 1, Máximo 4, Inicial 1
+  # LÃ­mites requeridos: MÃ­nimo 1, MÃ¡ximo 4, Inicial 1
   min_size         = var.asg_min_size
   max_size         = var.asg_max_size
   desired_capacity = var.asg_desired_capacity
 
-  # Comprobación de salud basada en el Load Balancer
+  # ComprobaciÃ³n de salud basada en el Load Balancer
   health_check_type         = "ELB"
   health_check_grace_period = 180
   default_cooldown          = 60

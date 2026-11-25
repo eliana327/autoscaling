@@ -13,11 +13,11 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Proyecto    = var.project_name
-      Entorno     = var.environment
-      Gestion     = "Terraform"
+      Proyecto     = var.project_name
+      Entorno      = var.environment
+      Gestion      = "Terraform"
       Arquitectura = "AutoScaling-ALB"
-      Capa        = "FreeTier"
+      Capa         = "FreeTier"
     }
   }
 }

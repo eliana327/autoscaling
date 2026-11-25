@@ -79,7 +79,7 @@ BOOT_TIME = time.time()
 LAST_CPU_IDLE = 0.0
 LAST_CPU_TOTAL = 0.0
 STRESS_PROCS = []
-STRESS_LOCK = threading.Lock()
+STRESS_LOCK = threading.RLock()
 
 def get_imds(path):
     try:
