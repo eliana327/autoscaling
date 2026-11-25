@@ -15,9 +15,9 @@ mkdir -p /var/www/html
 mkdir -p /opt/app
 
 # 3. Escribir Frontend Web (HTML, CSS, JS) decodificando Base64
-echo '${base64_index_html}' | base64 -d > /var/www/html/index.html
-echo '${base64_styles_css}' | base64 -d > /var/www/html/styles.css
-echo '${base64_app_js}' | base64 -d > /var/www/html/app.js
+aws s3 cp s3://${bucket_name}/index.html /var/www/html/index.html
+aws s3 cp s3://${bucket_name}/styles.css /var/www/html/styles.css
+aws s3 cp s3://${bucket_name}/app.js /var/www/html/app.js
 
 # Permisos para Nginx
 chown -R nginx:nginx /var/www/html
