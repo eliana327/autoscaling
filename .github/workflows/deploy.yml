@@ -1,0 +1,81 @@
+name: Pipeline CI/CD Auto Scaling & ALB (OIDC)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: "us-east-1"
+  # ARN del Rol IAM creado por la fase de Bootstrap centralizada
+  AWS_ROLE_ARN: ${{ secrets.AWS_OIDC_ROLE_ARN || 'arn:aws:iam::079301214534:role/citas-escolares-github-oidc-role' }}
+
+jobs:
+  despliegue:
+    name: "Desplegar Infraestructura Auto Scaling en AWS"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout del Repositorio
+        uses: actions/checkout@v4
+
+      - name: Autenticación con AWS vía OIDC (Sin Credenciales Estáticas)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+
+      - name: Configurar Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+
+      - name: Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: ./terraform
+        run: terraform plan -no-color
+
+      - name: Terraform Apply
+        working-directory: ./terraform
+        run: terraform apply -auto-approve
+
+      - name: Extraer Variables de Salida y Generar Resumen
+        id: tf_outputs
+        working-directory: ./terraform
+        run: |
+          ALB_URL=$(terraform output -raw alb_url)
+          ALB_DNS=$(terraform output -raw alb_dns_name)
+          ASG_NAME=$(terraform output -raw autoscaling_group_name)
+          MIN_SIZE=$(terraform output -raw autoscaling_min_size)
+          MAX_SIZE=$(terraform output -raw autoscaling_max_size)
+          HIGH_ALARM=$(terraform output -raw high_cpu_alarm_name)
+          LOW_ALARM=$(terraform output -raw low_cpu_alarm_name)
+
+          echo "alb_url=$ALB_URL" >> $GITHUB_OUTPUT
+          echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
+
+          echo "## 🚀 Despliegue Exitoso de Auto Scaling & ALB" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "La infraestructura ha sido aprovisionada en AWS dentro de la **Capa Gratuita (Free Tier)**:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "* 🌐 **URL de la Aplicación Web:** [$ALB_URL]($ALB_URL)" >> $GITHUB_STEP_SUMMARY
+          echo "* ⚖️ **Application Load Balancer DNS:** \`$ALB_DNS\`" >> $GITHUB_STEP_SUMMARY
+          echo "* 📦 **Auto Scaling Group:** \`$ASG_NAME\` (Min: $MIN_SIZE | Max: $MAX_SIZE | Tipo: t3.micro)" >> $GITHUB_STEP_SUMMARY
+          echo "* 🔺 **Alarma Scale-Out (CPU ≥ 50% por 1 min):** \`$HIGH_ALARM\`" >> $GITHUB_STEP_SUMMARY
+          echo "* 🔻 **Alarma Scale-In (CPU ≤ 20% por 2 min):** \`$LOW_ALARM\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🧪 Instrucciones para Demostración Visual:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Abre la URL **[$ALB_URL]($ALB_URL)** en tu navegador." >> $GITHUB_STEP_SUMMARY
+          echo "2. Presiona **'Iniciar Prueba de Estrés'** para elevar la CPU de la instancia al 100%." >> $GITHUB_STEP_SUMMARY
+          echo "3. CloudWatch activará la alarma y el ASG escalará automáticamente hasta **4 instancias**." >> $GITHUB_STEP_SUMMARY
+          echo "4. Presiona **'Lanzar Ráfaga'** en la prueba de balanceo para ver visualmente cómo el ALB reparte el tráfico entre las instancias activas." >> $GITHUB_STEP_SUMMARY
+          echo "5. Presiona **'Detener Prueba de Estrés'** para verificar el escalado hacia abajo (Scale-In)." >> $GITHUB_STEP_SUMMARY

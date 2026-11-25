@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AWS Auto Scaling & Load Balancing Dashboard</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="main-header">
+      <div class="logo-area">
+        <div class="aws-badge">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+          <span>AWS ARCHITECTURE</span>
+        </div>
+        <h1>Auto Scaling Group & Load Balancer</h1>
+        <p class="subtitle">Demostración en vivo de escalado dinámico (1 a 4 instancias t3.micro) y balanceo ALB</p>
+      </div>
+      <div class="system-specs">
+        <div class="spec-pill"><span class="label">Instancia:</span> <span class="val highlight">t3.micro (Free Tier)</span></div>
+        <div class="spec-pill"><span class="label">Límites ASG:</span> <span class="val">Min: 1 | Max: 4</span></div>
+        <div class="spec-pill"><span class="label">Escalado:</span> <span class="val">Out ≥ 50% | In ≤ 20%</span></div>
+      </div>
+    </header>
+
+    <!-- Banner de la Instancia que Atiende -->
+    <section class="current-instance-card">
+      <div class="card-header-flex">
+        <div class="instance-title-group">
+          <span class="pulse-indicator live"></span>
+          <h2>Instancia que responde a tu navegador</h2>
+        </div>
+        <div class="refresh-indicator">
+          <button id="btnRefreshInfo" class="btn-icon" title="Actualizar datos">&#x21bb;</button>
+          <span id="lastUpdated">Actualizando...</span>
+        </div>
+      </div>
+
+      <div class="instance-details-grid">
+        <div class="detail-box main-box">
+          <span class="detail-label">Instance ID</span>
+          <span class="detail-value mono" id="instId">i-cargando...</span>
+          <span class="detail-sub mono" id="instAz">Zona: --</span>
+        </div>
+        <div class="detail-box">
+          <span class="detail-label">IP Privada</span>
+          <span class="detail-value mono" id="instIp">--.---.---.---</span>
+          <span class="detail-sub" id="instUptime">Uptime: --</span>
+        </div>
+        <div class="detail-box metric-box">
+          <div class="metric-top">
+            <span class="detail-label">Consumo de CPU</span>
+            <span class="metric-percent" id="cpuPercent">0%</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="cpuProgressBar" style="width: 0%;"></div>
+          </div>
+          <span class="detail-sub" id="cpuStatusLabel">Carga normal</span>
+        </div>
+        <div class="detail-box metric-box">
+          <div class="metric-top">
+            <span class="detail-label">Memoria RAM</span>
+            <span class="metric-percent" id="memPercent">0%</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill mem-fill" id="memProgressBar" style="width: 0%;"></div>
+          </div>
+          <span class="detail-sub mono" id="memUsageLabel">-- MB / -- MB</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Paneles Principales: Prueba de Estrés y Prueba de Balanceo -->
+    <main class="dashboard-grid">
+      <!-- PANEL 1: CONTROL DE ESTRÉS (SCALE-OUT) -->
+      <section class="panel stress-panel">
+        <div class="panel-header">
+          <div class="panel-icon stress-icon">⚡</div>
+          <div>
+            <h3>Prueba de Estrés (CPU Stress Test)</h3>
+            <p>Satura la CPU de la máquina al 100% para activar la alarma de CloudWatch y escalar a 4 instancias.</p>
+          </div>
+        </div>
+
+        <div class="stress-status-card" id="stressCard">
+          <div class="stress-badge" id="stressBadge">
+            <span class="status-dot"></span>
+            <span id="stressStatusText">ESTRÉS INACTIVO</span>
+          </div>
+          <div class="stress-timer mono" id="stressTimer">00:00</div>
+          <p class="stress-desc" id="stressDesc">
+            Presiona el botón para generar carga matemática intensiva en los 2 vCPUs de esta máquina t3.micro.
+          </p>
+        </div>
+
+        <div class="alarm-explanation">
+          <div class="alarm-row out">
+            <span class="alarm-badge">▲ Scale-Out</span>
+            <span>CPU ≥ 50% por 1 min ➔ Auto Scaling Group agrega instancias (+1 hasta máx 4)</span>
+          </div>
+          <div class="alarm-row in">
+            <span class="alarm-badge">▼ Scale-In</span>
+            <span>CPU ≤ 20% por 2 min ➔ Auto Scaling Group reduce instancias (-1 hasta mín 1)</span>
+          </div>
+        </div>
+
+        <div class="button-group">
+          <button id="btnStartStress" class="btn btn-danger">
+            <span class="btn-icon-symbol">⚡</span> Iniciar Estrés (CPU 100%)
+          </button>
+          <button id="btnStopStress" class="btn btn-secondary" disabled>
+            <span class="btn-icon-symbol">⏹</span> Detener Estrés (Bajar CPU)
+          </button>
+        </div>
+      </section>
+
+      <!-- PANEL 2: PRUEBA VISUAL DE BALANCEO (ALB) -->
+      <section class="panel balance-panel">
+        <div class="panel-header">
+          <div class="panel-icon balance-icon">⚖️</div>
+          <div>
+            <h3>Prueba Visual de Balanceo de Carga</h3>
+            <p>Envía ráfagas al ALB y observa cómo se distribuyen las peticiones entre las instancias activas.</p>
+          </div>
+        </div>
+
+        <div class="balance-controls">
+          <div class="burst-selector">
+            <label>Tamaño de ráfaga:</label>
+            <div class="radio-chips">
+              <label><input type="radio" name="burstSize" value="20" checked> 20 req</label>
+              <label><input type="radio" name="burstSize" value="50"> 50 req</label>
+              <label><input type="radio" name="burstSize" value="100"> 100 req</label>
+            </div>
+          </div>
+          <div class="balance-actions">
+            <button id="btnRunBurst" class="btn btn-primary">
+              <span class="btn-icon-symbol">🚀</span> Lanzar Ráfaga
+            </button>
+            <button id="btnToggleLoop" class="btn btn-outline">
+              <span class="btn-icon-symbol">🔄</span> <span id="loopBtnText">Monitoreo Continuo</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="test-progress-area" id="testProgressArea" style="display: none;">
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill test-fill" id="testProgressBar" style="width: 0%;"></div>
+          </div>
+          <span class="detail-sub" id="testProgressLabel">Enviando peticiones: 0/20</span>
+        </div>
+
+        <!-- Visualizador de Instancias Detectadas -->
+        <div class="instances-visualization">
+          <div class="viz-header">
+            <h4>Instancias Activas Detectadas (<span id="instanceCount">0</span>)</h4>
+            <span class="total-requests mono">Total: <span id="totalReqCount">0</span> reqs</span>
+          </div>
+          
+          <div class="instance-cards-grid" id="instanceCardsGrid">
+            <div class="empty-state">Lanza una prueba para descubrir las instancias del balanceador</div>
+          </div>
+        </div>
+
+        <!-- Gráfico de Distribución Porcentual -->
+        <div class="distribution-bars" id="distributionBars"></div>
+      </section>
+    </main>
+
+    <!-- Historial de Peticiones en Vivo -->
+    <section class="requests-log-section">
+      <div class="section-header-flex">
+        <h3>Registro de Peticiones al Balanceador (Live Stream)</h3>
+        <button id="btnClearLog" class="btn-text">Limpiar Historial</button>
+      </div>
+      <div class="table-container">
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Hora</th>
+              <th>Instance ID</th>
+              <th>Zona (AZ)</th>
+              <th>IP Privada</th>
+              <th>CPU Remota</th>
+              <th>Latencia</th>
+            </tr>
+          </thead>
+          <tbody id="logTableBody">
+            <tr class="empty-row"><td colspan="7">No se han ejecutado peticiones aún</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Footer con resumen de la arquitectura -->
+    <footer class="main-footer">
+      <div class="footer-grid">
+        <div class="footer-col">
+          <strong>Arquitectura AWS</strong>
+          <p>Application Load Balancer (ALB) + Auto Scaling Group en 2 Zonas de Disponibilidad (us-east-1a, us-east-1b).</p>
+        </div>
+        <div class="footer-col">
+          <strong>Capa Gratuita (Free Tier)</strong>
+          <p>Instancias EC2 t3.micro (2 vCPU, 1 GB RAM, disco gp3). 750 horas mensuales de cómputo gratuito.</p>
+        </div>
+        <div class="footer-col">
+          <strong>Despliegue CI/CD</strong>
+          <p>Gestionado por GitHub Actions vía OpenID Connect (OIDC) sin claves estáticas y con Terraform remoto.</p>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
