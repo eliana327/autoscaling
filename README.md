@@ -80,3 +80,5 @@ Cada `push` a la rama `main` activa el pipeline `.github/workflows/deploy.yml`:
 5. Presiona **"⏹️ Detener Prueba de Estrés"**.
    * La CPU caerá a <5%.
    * CloudWatch activará `asg-low-cpu-alarm` y el ASG apagará gradualmente las instancias sobrantes hasta volver al límite inferior de 1.
+
+<!-- prueba de despliegue -->
